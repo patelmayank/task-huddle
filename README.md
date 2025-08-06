@@ -71,3 +71,35 @@ Yes, you can!
 To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
 
 Read more here: [Setting up a custom domain](https://docs.lovable.dev/tips-tricks/custom-domain#step-by-step-guide)
+
+
+
+CRITICAL SECURITY FINDINGS
+1. MAJOR PII EXPOSURE - Profiles Table
+Severity: HIGH 🚨
+
+Your profiles table has a severe security vulnerability where ALL user email addresses and profile information are publicly visible. The current RLS policy is:
+
+"Users can view all profiles" FOR SELECT USING (true)
+This means any authenticated user can access all user emails and personal information from the entire platform - a massive privacy violation and potential GDPR compliance issue.
+
+2. Weak Authentication Configuration
+Severity: MEDIUM ⚠️
+
+The Supabase linter identified:
+
+OTP expiry exceeds recommended threshold - Authentication tokens stay valid too long
+Leaked password protection is disabled - No protection against compromised passwords
+
+3. Missing Input Validation on Team Invitations
+Severity: MEDIUM ⚠️
+
+The team invitation system lacks proper validation:
+
+No email format validation before database insertion
+No sanitization of invitation messages
+No rate limiting on invitation sending
+4. Edge Function Email Security
+Severity: LOW-MEDIUM ⚠️
+
+The team invitation edge function constructs HTML emails with user input without proper sanitization, though the risk is limited since it's sent via Supabase's email service.
