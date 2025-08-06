@@ -18,6 +18,7 @@ const corsHeaders = {
 
 interface TeamInvitationRequest {
   email: string;
+  projectId: string;
   projectName: string;
   inviterName: string;
   roleName: string;
@@ -36,6 +37,7 @@ const handler = async (req: Request): Promise<Response> => {
   try {
     const { 
       email, 
+      projectId,
       projectName, 
       inviterName, 
       roleName, 
@@ -44,6 +46,20 @@ const handler = async (req: Request): Promise<Response> => {
     }: TeamInvitationRequest = await req.json();
 
     console.log(`[TeamInvitation] Sending invitation to ${email} for project ${projectName}`);
+
+    // Security: Log the invitation attempt
+    await supabase
+      .from('security_audit_logs')
+      .insert({
+        action: 'email_invitation_sent',
+        resource_type: 'project',
+        resource_id: projectId,
+        details: {
+          invited_email: email,
+          project_name: projectName,
+          inviter_name: inviterName
+        }
+      });
 
     const acceptUrl = `${req.headers.get('origin') || 'http://localhost:3000'}/auth?invite=${invitationToken}`;
 

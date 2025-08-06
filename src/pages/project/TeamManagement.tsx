@@ -2,6 +2,9 @@ import { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
+import { teamInvitationSchema, type TeamInvitationInput } from '@/lib/validation';
+import { useRateLimit } from '@/hooks/useRateLimit';
+import { useSecurityAudit } from '@/hooks/useSecurityAudit';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -93,6 +96,14 @@ interface Invitation {
 export default function TeamManagement() {
   const { projectId } = useParams<{ projectId: string }>();
   const { user } = useAuth();
+  
+  // Security hooks
+  const rateLimit = useRateLimit({
+    maxAttempts: 10,
+    windowMinutes: 60,
+    action: 'invitation'
+  });
+  const { logSecurityEvent } = useSecurityAudit();
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
   const [invitations, setInvitations] = useState<Invitation[]>([]);
@@ -108,11 +119,12 @@ export default function TeamManagement() {
   const [memberToRemove, setMemberToRemove] = useState<TeamMember | null>(null);
   
   // Form states
-  const [inviteForm, setInviteForm] = useState({
+  const [inviteForm, setInviteForm] = useState<TeamInvitationInput>({
     email: '',
-    role_id: '',
+    roleId: '',
     message: ''
   });
+  const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
   
   const [editForm, setEditForm] = useState<{
     role_id: string;
@@ -216,30 +228,117 @@ export default function TeamManagement() {
   };
 
   const handleInviteMember = async () => {
-    if (!projectId || !user || !inviteForm.email || !inviteForm.role_id) return;
+    if (!projectId || !user) return;
+
+    // Reset validation errors
+    setValidationErrors({});
+
+    // Validate input
+    const validation = teamInvitationSchema.safeParse(inviteForm);
+    if (!validation.success) {
+      const errors: Record<string, string> = {};
+      validation.error.issues.forEach((err) => {
+        if (err.path[0]) {
+          errors[err.path[0] as string] = err.message;
+        }
+      });
+      setValidationErrors(errors);
+      return;
+    }
+
+    // Check rate limit
+    const canProceed = await rateLimit.checkRateLimit(projectId);
+    if (!canProceed) return;
 
     try {
+      // Log security event
+      await logSecurityEvent({
+        action: 'team_invitation_attempt',
+        resource_type: 'project',
+        resource_id: projectId,
+        details: { 
+          invited_email: validation.data.email,
+          role_id: validation.data.roleId 
+        }
+      });
+
       const { error } = await supabase
         .from('team_invitations')
         .insert([{
           project_id: projectId,
-          email: inviteForm.email,
-          role_id: inviteForm.role_id,
+          email: validation.data.email,
+          role_id: validation.data.roleId,
           invited_by: user.id
         }]);
 
       if (error) throw error;
 
-      toast({
-        title: "Invitation sent!",
-        description: `An invitation has been sent to ${inviteForm.email}.`,
+      // Record successful attempt for rate limiting
+      await rateLimit.recordAttempt(projectId);
+
+      // Get project details and role info for email
+      const [{ data: projectData }, { data: roleData }, { data: inviterProfile }] = await Promise.all([
+        supabase.from('projects').select('name').eq('id', projectId).single(),
+        supabase.from('roles').select('name').eq('id', validation.data.roleId).single(),
+        supabase.from('profiles').select('display_name').eq('user_id', user.id).single()
+      ]);
+
+      // Call edge function to send email
+      const { error: emailError } = await supabase.functions.invoke('send-team-invitation', {
+        body: {
+          email: validation.data.email,
+          projectId: projectId,
+          projectName: projectData?.name || 'Unknown Project',
+          inviterName: inviterProfile?.display_name || user.email || 'Team Admin',
+          roleName: roleData?.name || 'Member',
+          invitationToken: '', // Will be set by the edge function
+          message: validation.data.message || '',
+        }
       });
 
-      setInviteForm({ email: '', role_id: '', message: '' });
+      if (emailError) {
+        console.error('Email sending failed:', emailError);
+        toast({
+          title: "Invitation created but email failed",
+          description: "The invitation was created but email could not be sent. Please contact the user directly.",
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Invitation sent!",
+          description: `An invitation has been sent to ${validation.data.email}.`,
+        });
+      }
+
+      // Log successful invitation
+      await logSecurityEvent({
+        action: 'team_invitation_sent',
+        resource_type: 'project',
+        resource_id: projectId,
+        details: { 
+          invited_email: validation.data.email,
+          email_sent: !emailError 
+        }
+      });
+
+      setInviteForm({ email: '', roleId: '', message: '' });
       setIsInviteModalOpen(false);
       fetchTeamData();
     } catch (error: any) {
       console.error('Error inviting member:', error);
+      
+      // Log failed invitation
+      await logSecurityEvent({
+        action: 'team_invitation_failed',
+        resource_type: 'project',
+        resource_id: projectId,
+        success: false,
+        details: { 
+          invited_email: validation.data.email,
+          error: error.message 
+        }
+      });
+
       toast({
         title: "Error sending invitation",
         description: error.message || "Please try again.",
@@ -391,11 +490,14 @@ export default function TeamManagement() {
                   value={inviteForm.email}
                   onChange={(e) => setInviteForm(prev => ({ ...prev, email: e.target.value }))}
                 />
+                {validationErrors.email && (
+                  <p className="text-sm text-destructive">{validationErrors.email}</p>
+                )}
               </div>
               
               <div className="space-y-2">
                 <Label>Role</Label>
-                <Select value={inviteForm.role_id} onValueChange={(value) => setInviteForm(prev => ({ ...prev, role_id: value }))}>
+                <Select value={inviteForm.roleId} onValueChange={(value) => setInviteForm(prev => ({ ...prev, roleId: value }))}>
                   <SelectTrigger>
                     <SelectValue placeholder="Select a role" />
                   </SelectTrigger>
@@ -410,6 +512,9 @@ export default function TeamManagement() {
                     ))}
                   </SelectContent>
                 </Select>
+                {validationErrors.roleId && (
+                  <p className="text-sm text-destructive">{validationErrors.roleId}</p>
+                )}
               </div>
               
               <div className="space-y-2">
@@ -421,6 +526,9 @@ export default function TeamManagement() {
                   onChange={(e) => setInviteForm(prev => ({ ...prev, message: e.target.value }))}
                   rows={3}
                 />
+                {validationErrors.message && (
+                  <p className="text-sm text-destructive">{validationErrors.message}</p>
+                )}
               </div>
             </div>
             <DialogFooter>
@@ -429,7 +537,7 @@ export default function TeamManagement() {
               </Button>
               <Button 
                 onClick={handleInviteMember}
-                disabled={!inviteForm.email || !inviteForm.role_id}
+                disabled={!inviteForm.email || !inviteForm.roleId}
               >
                 <Mail className="h-4 w-4 mr-2" />
                 Send Invitation
