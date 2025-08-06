@@ -58,16 +58,34 @@ export default function TaskBoard() {
 
   const fetchTasks = async () => {
     try {
+      // Add comprehensive error logging to catch future issues
+      console.log(`[TaskBoard] Fetching tasks for project: ${projectId}`);
+      
       const { data, error } = await supabase
         .from('tasks')
         .select('*')
         .eq('project_id', projectId)
         .order('created_at', { ascending: false });
 
-      if (error) throw error;
+      if (error) {
+        console.error(`[TaskBoard] Database error fetching tasks:`, {
+          error: error.message,
+          code: error.code,
+          details: error.details,
+          projectId
+        });
+        throw error;
+      }
+      
+      console.log(`[TaskBoard] Successfully fetched ${data?.length || 0} tasks`);
       setTasks(data || []);
     } catch (error: any) {
-      console.error('Error fetching tasks:', error);
+      console.error(`[TaskBoard] Fatal error in fetchTasks:`, {
+        error: error.message,
+        stack: error.stack,
+        projectId,
+        timestamp: new Date().toISOString()
+      });
       toast({
         title: "Error loading tasks",
         description: "Please try refreshing the page.",
@@ -79,9 +97,24 @@ export default function TaskBoard() {
   };
 
   const handleCreateTask = async () => {
-    if (!projectId || !user || !newTask.title.trim()) return;
+    if (!projectId || !user || !newTask.title.trim()) {
+      console.warn(`[TaskBoard] Task creation blocked:`, {
+        projectId: !!projectId,
+        user: !!user,
+        titleValid: !!newTask.title.trim(),
+        timestamp: new Date().toISOString()
+      });
+      return;
+    }
 
     try {
+      console.log(`[TaskBoard] Creating task:`, {
+        title: newTask.title,
+        projectId,
+        userId: user.id,
+        priority: newTask.priority
+      });
+
       const { error } = await supabase
         .from('tasks')
         .insert([{
@@ -93,8 +126,20 @@ export default function TaskBoard() {
           status: 'todo'
         }]);
 
-      if (error) throw error;
+      if (error) {
+        console.error(`[TaskBoard] Database error creating task:`, {
+          error: error.message,
+          code: error.code,
+          details: error.details,
+          hint: error.hint,
+          projectId,
+          userId: user.id
+        });
+        throw error;
+      }
 
+      console.log(`[TaskBoard] Task created successfully:`, newTask.title);
+      
       toast({
         title: "Task created!",
         description: `"${newTask.title}" has been added to the board.`,
@@ -102,12 +147,30 @@ export default function TaskBoard() {
 
       setNewTask({ title: '', description: '', priority: 'medium' });
       setIsCreateDialogOpen(false);
-      fetchTasks();
+      
+      // Refresh tasks to show the new one
+      await fetchTasks();
     } catch (error: any) {
-      console.error('Error creating task:', error);
+      console.error(`[TaskBoard] Fatal error in handleCreateTask:`, {
+        error: error.message,
+        code: error.code,
+        stack: error.stack,
+        projectId,
+        userId: user?.id,
+        timestamp: new Date().toISOString()
+      });
+      
+      // Provide user-friendly error messages based on error type
+      let errorMessage = "Please try again.";
+      if (error.code === "42P17") {
+        errorMessage = "Database configuration error. Please contact support.";
+      } else if (error.code === "23503") {
+        errorMessage = "Invalid project reference. Please refresh and try again.";
+      }
+      
       toast({
         title: "Error creating task",
-        description: error.message || "Please try again.",
+        description: errorMessage,
         variant: "destructive",
       });
     }
