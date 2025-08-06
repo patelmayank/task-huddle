@@ -12,6 +12,7 @@ import ProjectLayout from "./pages/project/ProjectLayout";
 import ProjectOverview from "./pages/project/ProjectOverview";
 import TaskBoard from "./pages/project/TaskBoard";
 import ProjectSettings from "./pages/project/ProjectSettings";
+import TeamManagement from "./pages/project/TeamManagement";
 import DashboardLayout from "./components/layout/DashboardLayout";
 import NotFound from "./pages/NotFound";
 
@@ -35,6 +36,7 @@ const App = () => (
               <Route index element={<ProjectOverview />} />
               <Route path="overview" element={<ProjectOverview />} />
               <Route path="tasks" element={<TaskBoard />} />
+              <Route path="team" element={<TeamManagement />} />
               <Route path="settings" element={<ProjectSettings />} />
             </Route>
             <Route path="*" element={<NotFound />} />

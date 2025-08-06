@@ -22,6 +22,12 @@ const navigationItems = [
     href: 'tasks'
   },
   {
+    id: 'team',
+    label: 'Team',
+    icon: Users,
+    href: 'team'
+  },
+  {
     id: 'settings',
     label: 'Settings',
     icon: Settings,
