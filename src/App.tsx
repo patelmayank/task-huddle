@@ -7,6 +7,7 @@ import { AuthProvider } from "@/hooks/useAuth";
 import Index from "./pages/Index";
 import Auth from "./pages/Auth";
 import Dashboard from "./pages/Dashboard";
+import CreateProject from "./pages/CreateProject";
 import DashboardLayout from "./components/layout/DashboardLayout";
 import NotFound from "./pages/NotFound";
 
@@ -25,6 +26,8 @@ const App = () => (
             <Route path="/dashboard" element={<DashboardLayout />}>
               <Route index element={<Dashboard />} />
             </Route>
+            <Route path="/projects/new" element={<CreateProject />} />
+            <Route path="/project/:id" element={<div>Project View Coming Soon</div>} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>
