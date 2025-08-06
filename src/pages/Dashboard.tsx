@@ -56,52 +56,57 @@ export default function Dashboard() {
 
   const fetchDashboardData = async () => {
     try {
-      // Fetch projects with task counts
+      // Fetch projects without joins to avoid recursion
       const { data: projectsData, error: projectsError } = await supabase
         .from('projects')
-        .select(`
-          *,
-          tasks(count)
-        `)
+        .select('*')
         .order('updated_at', { ascending: false })
         .limit(6);
 
       if (projectsError) throw projectsError;
 
-      // Fetch recent tasks for activity feed
+      // Fetch recent tasks separately
       const { data: tasksData, error: tasksError } = await supabase
         .from('tasks')
         .select(`
           id,
           title,
           created_at,
-          projects(name)
+          project_id
         `)
         .order('created_at', { ascending: false })
         .limit(10);
 
       if (tasksError) throw tasksError;
 
-      // Process data
-      const processedProjects = projectsData?.map(project => ({
-        ...project,
-        task_count: project.tasks?.length || 0
-      })) || [];
+      // Get task counts for each project
+      const projectsWithTaskCounts = await Promise.all(
+        (projectsData || []).map(async (project) => {
+          const projectTasks = tasksData?.filter(task => task.project_id === project.id) || [];
+          return {
+            ...project,
+            task_count: projectTasks.length
+          };
+        })
+      );
 
+      // Get project names for activity
+      const projectMap = new Map(projectsData?.map(p => [p.id, p.name]) || []);
+      
       const activity = tasksData?.map(task => ({
         id: task.id,
         action: 'created a task',
-        project_name: task.projects?.name || 'Unknown Project',
+        project_name: projectMap.get(task.project_id) || 'Unknown Project',
         user_name: 'Team Member',
         created_at: task.created_at
       })) || [];
 
-      setProjects(processedProjects);
+      setProjects(projectsWithTaskCounts);
       setRecentActivity(activity);
 
       // Calculate stats
-      const totalProjects = processedProjects.length;
-      const totalTasks = processedProjects.reduce((sum, p) => sum + (p.task_count || 0), 0);
+      const totalProjects = projectsWithTaskCounts.length;
+      const totalTasks = projectsWithTaskCounts.reduce((sum, p) => sum + (p.task_count || 0), 0);
       
       setStats({
         totalProjects,

@@ -37,13 +37,10 @@ export default function ProjectLayout() {
     if (!projectId) return;
     
     try {
-      // Fetch project with task count
+      // Fetch project without joins to avoid recursion
       const { data: projectData, error: projectError } = await supabase
         .from('projects')
-        .select(`
-          *,
-          tasks(count)
-        `)
+        .select('*')
         .eq('id', projectId)
         .single();
 
@@ -56,9 +53,19 @@ export default function ProjectLayout() {
         return;
       }
 
+      // Fetch task count separately
+      const { data: tasksData, error: tasksError } = await supabase
+        .from('tasks')
+        .select('id')
+        .eq('project_id', projectId);
+
+      if (tasksError) {
+        console.error('Error fetching tasks:', tasksError);
+      }
+
       const processedProject = {
         ...projectData,
-        task_count: projectData.tasks?.length || 0,
+        task_count: tasksData?.length || 0,
         member_count: 1 // Will be updated when we implement team management
       };
 
