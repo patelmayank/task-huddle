@@ -8,6 +8,10 @@ import Index from "./pages/Index";
 import Auth from "./pages/Auth";
 import Dashboard from "./pages/Dashboard";
 import CreateProject from "./pages/CreateProject";
+import ProjectLayout from "./pages/project/ProjectLayout";
+import ProjectOverview from "./pages/project/ProjectOverview";
+import TaskBoard from "./pages/project/TaskBoard";
+import ProjectSettings from "./pages/project/ProjectSettings";
 import DashboardLayout from "./components/layout/DashboardLayout";
 import NotFound from "./pages/NotFound";
 
@@ -27,7 +31,12 @@ const App = () => (
               <Route index element={<Dashboard />} />
             </Route>
             <Route path="/projects/new" element={<CreateProject />} />
-            <Route path="/project/:id" element={<div>Project View Coming Soon</div>} />
+            <Route path="/project/:projectId" element={<ProjectLayout />}>
+              <Route index element={<ProjectOverview />} />
+              <Route path="overview" element={<ProjectOverview />} />
+              <Route path="tasks" element={<TaskBoard />} />
+              <Route path="settings" element={<ProjectSettings />} />
+            </Route>
             <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>

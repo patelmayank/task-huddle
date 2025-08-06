@@ -49,7 +49,7 @@ export default function CreateProject() {
         description: `${formData.name} has been created successfully.`,
       });
 
-      navigate(`/project/${data.id}`);
+      navigate(`/project/${data.id}/overview`);
     } catch (error: any) {
       console.error('Error creating project:', error);
       toast({
