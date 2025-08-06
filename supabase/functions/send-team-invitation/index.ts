@@ -1,7 +1,14 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
-import { Resend } from "npm:resend@2.0.0";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.53.0";
 
-const resend = new Resend(Deno.env.get("RESEND_API_KEY"));
+const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+const supabase = createClient(supabaseUrl, supabaseServiceKey, {
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false
+  }
+});
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -38,7 +45,7 @@ const handler = async (req: Request): Promise<Response> => {
 
     console.log(`[TeamInvitation] Sending invitation to ${email} for project ${projectName}`);
 
-    const acceptUrl = `${Deno.env.get('SUPABASE_URL')}/auth/v1/verify?token=${invitationToken}&type=invite&redirect_to=${encodeURIComponent(`${req.headers.get('origin') || 'http://localhost:3000'}/auth?invite=${invitationToken}`)}`;
+    const acceptUrl = `${req.headers.get('origin') || 'http://localhost:3000'}/auth?invite=${invitationToken}`;
 
     const emailHtml = `
       <!DOCTYPE html>
@@ -98,19 +105,28 @@ const handler = async (req: Request): Promise<Response> => {
       </html>
     `;
 
-    const emailResponse = await resend.emails.send({
-      from: "TaskHuddle <invitations@resend.dev>",
-      to: [email],
-      subject: `You're invited to join "${projectName}" on TaskHuddle`,
-      html: emailHtml,
+    const { data: emailResponse, error: emailError } = await supabase.auth.admin.inviteUserByEmail(email, {
+      data: {
+        project_name: projectName,
+        inviter_name: inviterName,
+        role_name: roleName,
+        invitation_token: invitationToken,
+        message: message
+      },
+      redirectTo: acceptUrl
     });
+
+    if (emailError) {
+      console.error(`[TeamInvitation] Email error:`, emailError);
+      throw emailError;
+    }
 
     console.log(`[TeamInvitation] Email sent successfully:`, emailResponse);
 
     return new Response(JSON.stringify({ 
       success: true, 
       message: "Invitation sent successfully",
-      emailId: emailResponse.data?.id 
+      emailId: emailResponse.user?.id 
     }), {
       status: 200,
       headers: {
