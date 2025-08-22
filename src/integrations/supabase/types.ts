@@ -138,6 +138,30 @@ export type Database = {
         }
         Relationships: []
       }
+      request_logs: {
+        Row: {
+          action: string
+          created_at: string | null
+          id: string
+          request_id: string
+          user_id: string | null
+        }
+        Insert: {
+          action: string
+          created_at?: string | null
+          id?: string
+          request_id: string
+          user_id?: string | null
+        }
+        Update: {
+          action?: string
+          created_at?: string | null
+          id?: string
+          request_id?: string
+          user_id?: string | null
+        }
+        Relationships: []
+      }
       security_audit_logs: {
         Row: {
           action: string
@@ -184,6 +208,7 @@ export type Database = {
           description: string | null
           due_date: string | null
           id: string
+          order_index: number | null
           priority: Database["public"]["Enums"]["task_priority"]
           project_id: string
           status: Database["public"]["Enums"]["task_status"]
@@ -196,6 +221,7 @@ export type Database = {
           description?: string | null
           due_date?: string | null
           id?: string
+          order_index?: number | null
           priority?: Database["public"]["Enums"]["task_priority"]
           project_id: string
           status?: Database["public"]["Enums"]["task_status"]
@@ -208,6 +234,7 @@ export type Database = {
           description?: string | null
           due_date?: string | null
           id?: string
+          order_index?: number | null
           priority?: Database["public"]["Enums"]["task_priority"]
           project_id?: string
           status?: Database["public"]["Enums"]["task_status"]
@@ -304,6 +331,14 @@ export type Database = {
       is_project_member: {
         Args: { _project_id: string; _user_id?: string }
         Returns: boolean
+      }
+      reorder_task: {
+        Args: {
+          p_new_status: string
+          p_target_index: number
+          p_task_id: string
+        }
+        Returns: undefined
       }
     }
     Enums: {
