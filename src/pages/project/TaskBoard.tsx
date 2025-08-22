@@ -264,10 +264,23 @@ export default function TaskBoard() {
       return;
     }
 
+    // Optimistic update first for better UX
+    const originalTasks = [...tasks];
+    setTasks(prev => {
+      const task = prev.find(t => t.id === draggableId);
+      if (!task) return prev;
+      
+      return prev.map(t => 
+        t.id === draggableId 
+          ? { ...t, status: newStatus, order_index: destination.index * 100 }
+          : t
+      );
+    });
+
     try {
       console.log('Moving task:', { draggableId, newStatus, targetIndex: destination.index });
       
-      // Bug #3: Use gap-based reordering function with proper type casting
+      // Call the fixed database function
       const { error } = await supabase.rpc('reorder_task', {
         p_task_id: draggableId,
         p_new_status: newStatus,
@@ -275,36 +288,41 @@ export default function TaskBoard() {
       });
 
       if (error) {
-        console.error('Error in reorder_task:', error);
+        console.error('Database error moving task:', error);
+        // Revert optimistic update
+        setTasks(originalTasks);
         throw error;
       }
 
-      // Optimistic update
-      setTasks(prev => {
-        const task = prev.find(t => t.id === draggableId);
-        if (!task) return prev;
-        
-        return prev.map(t => 
-          t.id === draggableId 
-            ? { ...t, status: newStatus, order_index: destination.index * 100 }
-            : t
-        );
-      });
-
+      console.log('Task moved successfully');
+      
       toast({
         title: "Task moved!",
-        description: `Task moved to ${destination.droppableId.replace('_', ' ')}.`,
+        description: `Task moved to ${newStatus.replace('_', ' ')}.`,
       });
+
+      // Refresh to ensure data consistency
+      await fetchTasks();
     } catch (error: any) {
       console.error('Error updating task:', error);
+      
+      // Revert optimistic update if not already done
+      setTasks(originalTasks);
+      
+      let errorMessage = "Please try again.";
+      if (error.code === "PGRST203") {
+        errorMessage = "Database function conflict. Refreshing...";
+        await fetchTasks(); // Force refresh
+      } else if (error.message?.includes('not found')) {
+        errorMessage = "Task not found. Refreshing...";
+        await fetchTasks();
+      }
+      
       toast({
         title: "Error moving task",
-        description: "Please try again.",
+        description: errorMessage,
         variant: "destructive",
       });
-      
-      // Refresh to ensure consistency
-      await fetchTasks();
     }
   };
 
