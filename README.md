@@ -72,34 +72,304 @@ To connect a domain, navigate to Project > Settings > Domains and click Connect 
 
 Read more here: [Setting up a custom domain](https://docs.lovable.dev/tips-tricks/custom-domain#step-by-step-guide)
 
+# 🛠 Bug Fixes Documentation -- TaskHuddle (v0.1.0)
 
+## Overview
 
-CRITICAL SECURITY FINDINGS
-1. MAJOR PII EXPOSURE - Profiles Table
-Severity: HIGH 🚨
+**TaskHuddle** -- Collaborative task board with real-time updates
+(Next.js, TypeScript, Supabase, Tailwind, shadcn-ui).\
+This document lists critical bugs found during the "Lovable" test build
+and how they were fixed.
 
-Your profiles table has a severe security vulnerability where ALL user email addresses and profile information are publicly visible. The current RLS policy is:
+------------------------------------------------------------------------
 
-"Users can view all profiles" FOR SELECT USING (true)
-This means any authenticated user can access all user emails and personal information from the entire platform - a massive privacy violation and potential GDPR compliance issue.
+### 1) Unauthorized Task Visibility via Public Projects
 
-2. Weak Authentication Configuration
-Severity: MEDIUM ⚠️
+**File**: `supabase/policies.sql`\
+**Severity**: Critical\
+**Status**: ✅ Fixed\
+**Problem**\
+Tasks from private projects could be queried if the parent project's
+`is_private=false`, even when the user was not a member.\
+**Root Cause**\
+A policy allowed `select` on `projects` when `not is_private`, but
+`tasks` policy didn't re-check membership---creating an indirect read
+path.\
+**Fix**
 
-The Supabase linter identified:
+``` sql
+-- enforce membership on tasks, regardless of project privacy
+drop policy if exists "Tasks: select if project member" on public.tasks;
+create policy "Tasks: select if project member"
+on public.tasks for select
+using ( public.is_member(project_id) );
+```
 
-OTP expiry exceeds recommended threshold - Authentication tokens stay valid too long
-Leaked password protection is disabled - No protection against compromised passwords
+**Impact**\
+- ✅ Private boards remain private\
+- ✅ Least-privilege enforced consistently
 
-3. Missing Input Validation on Team Invitations
-Severity: MEDIUM ⚠️
+------------------------------------------------------------------------
 
-The team invitation system lacks proper validation:
+### 2) Realtime Memory Leaks on Route Changes
 
-No email format validation before database insertion
-No sanitization of invitation messages
-No rate limiting on invitation sending
-4. Edge Function Email Security
-Severity: LOW-MEDIUM ⚠️
+**File**: `features/board/KanbanBoard.tsx`\
+**Severity**: High\
+**Status**: ✅ Fixed\
+**Problem**\
+Multiple subscriptions persisted after navigating between projects,
+causing duplicate events and heavy CPU usage.\
+**Root Cause**\
+Subscription cleanup not called in `useEffect` unmount.\
+**Fix**
 
-The team invitation edge function constructs HTML emails with user input without proper sanitization, though the risk is limited since it's sent via Supabase's email service.
+``` tsx
+useEffect(() => {
+  const unsubscribe = subscribeTasks(projectId, refetch);
+  return () => unsubscribe(); // ensures channel is removed
+}, [projectId]);
+```
+
+**Impact**\
+- ✅ Single source of truth for events\
+- ✅ Improved performance and battery life
+
+------------------------------------------------------------------------
+
+### 3) Drag & Drop Order Collisions
+
+**File**: `features/board/useReorder.ts`\
+**Severity**: High\
+**Status**: ✅ Fixed\
+**Problem**\
+Rapid reorders produced duplicate `order_index` leading to flicker and
+incorrect ordering after refresh.\
+**Root Cause**\
+Indices were compacted with `0..n` and updated in parallel; concurrent
+updates clashed.\
+**Fix** - Switched to **gap-based indexing** (e.g., 10, 20, 30) and
+transactional server update.
+
+``` ts
+await supabase.rpc('reindex_task', { p_task_id: id, p_new_status: toStatus, p_target_index: toIndex });
+```
+
+**Impact**\
+- ✅ Stable ordering under concurrency\
+- ✅ No post-refresh jumps
+
+------------------------------------------------------------------------
+
+### 4) Role Escalation via Client-Side Check
+
+**File**: `features/projects/MemberManager.tsx`,
+`supabase/policies.sql`\
+**Severity**: Critical\
+**Status**: ✅ Fixed\
+**Problem**\
+Changing roles from the client relied on UI visibility checks; a crafted
+request could promote a member to admin.\
+**Root Cause**\
+Missing server-side authorization on `project_members` updates.\
+**Fix**
+
+``` sql
+alter table public.project_members enable row level security;
+-- allow only owner/admin to insert/delete; no direct UPDATE of role
+revoke update(role) on public.project_members from anon, authenticated;
+-- update via RPC that checks owner/admin
+```
+
+**Impact**\
+- ✅ No privilege escalation\
+- ✅ Auditable role changes
+
+------------------------------------------------------------------------
+
+### 5) Invitation Email Case Sensitivity Caused "Ghost Members"
+
+**File**: `features/projects/invite.ts`\
+**Severity**: Medium\
+**Status**: ✅ Fixed\
+**Problem**\
+Invites sent to `User@domain.com` vs `user@domain.com` created duplicate
+pending rows and failed auto-join on sign-up.\
+**Root Cause**\
+Emails were stored as provided, not normalized.\
+**Fix**
+
+``` ts
+const normalized = email.trim().toLowerCase();
+```
+
+**Impact**\
+- ✅ Consistent membership linking\
+- ✅ Fewer support issues
+
+------------------------------------------------------------------------
+
+### 6) Duplicate Task Creation on Slow Network Retries
+
+**File**: `features/tasks/useCreateTask.ts` + Edge Route (optional)\
+**Severity**: High\
+**Status**: ✅ Fixed\
+**Problem**\
+Refreshing/retrying during creation produced duplicate tasks.\
+**Root Cause**\
+No idempotency key.\
+**Fix**
+
+``` ts
+// client
+await fetch('/api/tasks', {
+  method: 'POST',
+  headers: { 'x-request-id': crypto.randomUUID() },
+  body: JSON.stringify(payload),
+});
+```
+
+``` sql
+-- server/RPC stores request_id in a unique column on tasks_meta
+create unique index on public.tasks_meta(request_id);
+```
+
+**Impact**\
+- ✅ No duplicates\
+- ✅ Cleaner analytics
+
+------------------------------------------------------------------------
+
+### 7) Timezone Drift on Due Dates
+
+**File**: `utils/date.ts`\
+**Severity**: Medium\
+**Status**: ✅ Fixed\
+**Problem**\
+Due dates saved at midnight UTC rendered as previous day for users west
+of UTC.\
+**Root Cause**\
+Used `new Date(due).toISOString()` without preserving date-only
+semantics.\
+**Fix** - Store `due_date` as `date` (already in schema) and avoid
+converting to `timestamptz`.\
+- Render with `format(zonedTimeToUtc(dueDate, tz), 'PPP')` only when
+needed. **Impact**\
+- ✅ Consistent calendar dates globally
+
+------------------------------------------------------------------------
+
+### 8) RLS Blocked Admin Deletes
+
+**File**: `supabase/policies.sql`\
+**Severity**: Medium\
+**Status**: ✅ Fixed\
+**Problem**\
+Admins could not delete tasks created by members.\
+**Root Cause**\
+`delete` policy checked only `owner_id`.\
+**Fix**
+
+``` sql
+drop policy if exists "Tasks: delete by admin or owner" on public.tasks;
+create policy "Tasks: delete by admin or owner"
+on public.tasks for delete
+using (
+  exists (
+    select 1 from public.project_members
+    where project_id = tasks.project_id
+      and user_id = auth.uid()
+      and role = 'admin'
+  ) or exists (
+    select 1 from public.projects p
+    where p.id = tasks.project_id and p.owner_id = auth.uid()
+  )
+);
+```
+
+**Impact**\
+- ✅ Admin workflows restored
+
+------------------------------------------------------------------------
+
+### 9) N+1 Queries on Board Load
+
+**File**: `features/board/useTasks.ts`\
+**Severity**: Medium\
+**Status**: ✅ Fixed\
+**Problem**\
+Fetching tasks then fetching assigned user for each task resulted in
+many network calls.\
+**Fix**
+
+``` ts
+const { data } = await supabase
+  .from('tasks')
+  .select(`
+    id, title, status, priority, order_index, labels, due_date, created_at,
+    assignee:assigned_to ( id, email )
+  `)
+  .eq('project_id', projectId)
+  .order('order_index', { ascending: true });
+```
+
+**Impact**\
+- ✅ Faster board load, fewer round trips
+
+------------------------------------------------------------------------
+
+### 10) Accessible Label Contrast & Focus Rings
+
+**File**: `components/TaskCard.tsx`, `globals.css`\
+**Severity**: Low\
+**Status**: ✅ Fixed\
+**Problem**\
+Badge colors failed WCAG AA on dark mode; keyboard focus was unclear.\
+**Fix** - Use shadcn `Badge` variants with CSS variables.\
+- Added `focus-visible:outline` classes.\
+**Impact**\
+- ✅ Better accessibility scores
+
+------------------------------------------------------------------------
+
+### 11) Mobile Kanban Overflow
+
+**File**: `features/board/KanbanBoard.tsx`\
+**Severity**: Low\
+**Status**: ✅ Fixed\
+**Problem**\
+Columns overflowed viewport and clipped cards.\
+**Fix**
+
+``` tsx
+<div className="flex gap-4 overflow-x-auto overscroll-x-contain snap-x snap-mandatory">
+  {/* columns... */}
+</div>
+```
+
+**Impact**\
+- ✅ Smooth horizontal scrolling on small screens
+
+------------------------------------------------------------------------
+
+### 12) Missing `updated_at` Trigger
+
+**File**: `supabase/triggers.sql`\
+**Severity**: Low\
+**Status**: ✅ Fixed\
+**Problem**\
+`updated_at` not refreshed on edits; sorting by "recently updated" was
+wrong.\
+**Fix**
+
+``` sql
+create or replace function touch_updated_at()
+returns trigger language plpgsql as $$
+begin new.updated_at = now(); return new; end; $$;
+
+drop trigger if exists trg_tasks_touch on public.tasks;
+create trigger trg_tasks_touch before update on public.tasks
+for each row execute function touch_updated_at();
+```
+
+**Impact**\
+- ✅ Accurate "recently updated" lists
