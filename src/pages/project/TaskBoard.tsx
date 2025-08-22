@@ -13,11 +13,12 @@ import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from '@/hooks/use-toast';
 import { useAuth } from '@/hooks/useAuth';
-import { Plus, Calendar, Flag, User } from 'lucide-react';
+import { Plus, Calendar, Flag, User, Edit, Trash2 } from 'lucide-react';
 import { formatInTimeZone } from 'date-fns-tz';
 import { format } from 'date-fns';
 
-interface Task {
+
+export interface Task {
   id: string;
   title: string;
   description: string | null;
