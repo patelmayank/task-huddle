@@ -176,11 +176,14 @@ export default function TeamManagement() {
     if (!projectId || !user || !inviteForm.email.trim()) return;
 
     try {
+      // Bug #5: Normalize email before storage
+      const normalizedEmail = inviteForm.email.trim().toLowerCase();
+      
       const { error } = await supabase
         .from('team_invitations')
         .insert([{
           project_id: projectId,
-          email: inviteForm.email,
+          email: normalizedEmail,
           role_id: inviteForm.role,
           invited_by: user.id
         }]);

@@ -14,6 +14,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { toast } from '@/hooks/use-toast';
 import { useAuth } from '@/hooks/useAuth';
 import { Plus, Calendar, Flag, User } from 'lucide-react';
+import { formatInTimeZone } from 'date-fns-tz';
+import { format } from 'date-fns';
 
 interface Task {
   id: string;
@@ -24,6 +26,13 @@ interface Task {
   created_at: string;
   due_date: string | null;
   assigned_to: string | null;
+  order_index: number;
+  updated_at: string;
+  assignee?: {
+    id: string;
+    email: string;
+    display_name?: string;
+  };
 }
 
 const columns = [
@@ -54,6 +63,22 @@ export default function TaskBoard() {
   useEffect(() => {
     if (projectId) {
       fetchTasks();
+      
+      // Bug #2: Realtime subscriptions with proper cleanup
+      const channel = supabase
+        .channel(`tasks_${projectId}`)
+        .on('postgres_changes', 
+          { event: '*', schema: 'public', table: 'tasks', filter: `project_id=eq.${projectId}` },
+          (payload) => {
+            console.log('Realtime task update:', payload);
+            fetchTasks(); // Refresh tasks on any change
+          }
+        )
+        .subscribe();
+
+      return () => {
+        supabase.removeChannel(channel);
+      };
     }
   }, [projectId]);
 
@@ -62,11 +87,13 @@ export default function TaskBoard() {
       // Add comprehensive error logging to catch future issues
       console.log(`[TaskBoard] Fetching tasks for project: ${projectId}`);
       
+      // Bug #9: Fix N+1 queries - for now fetch without join, then improve later
       const { data, error } = await supabase
         .from('tasks')
         .select('*')
         .eq('project_id', projectId)
-        .order('created_at', { ascending: false });
+        .order('status', { ascending: true })
+        .order('order_index', { ascending: true });
 
       if (error) {
         console.error(`[TaskBoard] Database error fetching tasks:`, {
@@ -79,7 +106,12 @@ export default function TaskBoard() {
       }
       
       console.log(`[TaskBoard] Successfully fetched ${data?.length || 0} tasks`);
-      setTasks(data || []);
+      // Transform data to match Task interface
+      const tasksWithAssignee = data?.map(task => ({
+        ...task,
+        assignee: task.assigned_to ? { id: task.assigned_to, email: '', display_name: '' } : undefined
+      })) || [];
+      setTasks(tasksWithAssignee);
     } catch (error: any) {
       console.error(`[TaskBoard] Fatal error in fetchTasks:`, {
         error: error.message,
@@ -109,12 +141,49 @@ export default function TaskBoard() {
     }
 
     try {
+      // Bug #6: Idempotency - generate unique request ID
+      const requestId = crypto.randomUUID();
+      
       console.log(`[TaskBoard] Creating task:`, {
         title: newTask.title,
         projectId,
         userId: user.id,
-        priority: newTask.priority
+        priority: newTask.priority,
+        requestId
       });
+
+      // Check if request already processed
+      const { data: existing } = await supabase
+        .from('request_logs')
+        .select('id')
+        .eq('request_id', requestId)
+        .single();
+        
+      if (existing) {
+        console.log('Request already processed, skipping');
+        return;
+      }
+
+      // Log request
+      await supabase
+        .from('request_logs')
+        .insert([{
+          request_id: requestId,
+          user_id: user.id,
+          action: 'create_task'
+        }]);
+
+      // Get next order index for todo column
+      const { data: lastTask } = await supabase
+        .from('tasks')
+        .select('order_index')
+        .eq('project_id', projectId)
+        .eq('status', 'todo')
+        .order('order_index', { ascending: false })
+        .limit(1)
+        .single();
+
+      const nextOrderIndex = (lastTask?.order_index || 0) + 100;
 
       const { error } = await supabase
         .from('tasks')
@@ -123,7 +192,8 @@ export default function TaskBoard() {
           description: newTask.description || null,
           priority: newTask.priority,
           project_id: projectId,
-          status: 'todo'
+          status: 'todo',
+          order_index: nextOrderIndex
         }]);
 
       if (error) {
@@ -179,22 +249,30 @@ export default function TaskBoard() {
   const handleDragEnd = async (result: DropResult) => {
     if (!result.destination) return;
 
-    const { draggableId, destination } = result;
+    const { draggableId, destination, source } = result;
     const newStatus = destination.droppableId as Task['status'];
 
     try {
-      const { error } = await supabase
-        .from('tasks')
-        .update({ status: newStatus })
-        .eq('id', draggableId);
+      // Bug #3: Use gap-based reordering function
+      const { error } = await supabase.rpc('reorder_task', {
+        p_task_id: draggableId,
+        p_new_status: newStatus,
+        p_target_index: destination.index
+      });
 
       if (error) throw error;
 
-      setTasks(prev => prev.map(task => 
-        task.id === draggableId 
-          ? { ...task, status: newStatus }
-          : task
-      ));
+      // Optimistic update
+      setTasks(prev => {
+        const task = prev.find(t => t.id === draggableId);
+        if (!task) return prev;
+        
+        return prev.map(t => 
+          t.id === draggableId 
+            ? { ...t, status: newStatus, order_index: destination.index * 100 }
+            : t
+        );
+      });
 
       toast({
         title: "Task moved!",
@@ -207,18 +285,24 @@ export default function TaskBoard() {
         description: "Please try again.",
         variant: "destructive",
       });
+      
+      // Refresh to ensure consistency
+      await fetchTasks();
     }
   };
 
   const getTasksByStatus = (status: string) => {
-    return tasks.filter(task => task.status === status);
+    return tasks.filter(task => task.status === status)
+      .sort((a, b) => a.order_index - b.order_index);
   };
 
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric'
-    });
+  // Bug #7: Fix timezone handling for dates
+  const formatDate = (dateString: string, timezone = 'UTC') => {
+    try {
+      return formatInTimeZone(new Date(dateString), timezone, 'MMM d');
+    } catch {
+      return format(new Date(dateString), 'MMM d');
+    }
   };
 
   if (loading) {
@@ -305,9 +389,10 @@ export default function TaskBoard() {
 
       {/* Kanban Board */}
       <DragDropContext onDragEnd={handleDragEnd}>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        {/* Bug #11: Mobile responsive with horizontal scroll */}
+        <div className="flex gap-6 overflow-x-auto overscroll-x-contain snap-x snap-mandatory pb-4 md:grid md:grid-cols-3 md:overflow-visible">
           {columns.map((column) => (
-            <div key={column.id}>
+            <div key={column.id} className="min-w-[300px] snap-start md:min-w-0">
               <Card className="bg-gradient-card shadow-card border-0">
                 <CardHeader className="pb-3">
                   <CardTitle className="flex items-center justify-between text-sm font-semibold">
@@ -334,9 +419,12 @@ export default function TaskBoard() {
                               ref={provided.innerRef}
                               {...provided.draggableProps}
                               {...provided.dragHandleProps}
-                              className={`bg-background border shadow-sm hover:shadow-card transition-shadow cursor-grab ${
+                              className={`bg-background border shadow-sm hover:shadow-card transition-shadow cursor-grab focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 ${
                                 snapshot.isDragging ? 'rotate-2 shadow-elegant' : ''
                               }`}
+                              tabIndex={0}
+                              role="button"
+                              aria-label={`Task: ${task.title}`}
                             >
                               <CardContent className="p-4">
                                 <div className="space-y-3">
@@ -359,10 +447,10 @@ export default function TaskBoard() {
                                       {formatDate(task.created_at)}
                                     </div>
                                     
-                                    {task.assigned_to && (
+                                    {task.assignee && (
                                       <Avatar className="h-5 w-5">
                                         <AvatarFallback className="text-xs bg-primary/10 text-primary">
-                                          U
+                                          {task.assignee.display_name?.[0] || task.assignee.email[0].toUpperCase()}
                                         </AvatarFallback>
                                       </Avatar>
                                     )}

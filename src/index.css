@@ -2,6 +2,53 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Bug #10: Accessibility - Enhanced focus styles and contrast */
+@layer base {
+  /* Ensure high contrast focus indicators */
+  *:focus-visible {
+    @apply outline-2 outline-offset-2 outline-primary;
+  }
+  
+  /* Skip to content link for screen readers */
+  .skip-to-content {
+    @apply absolute -top-full left-1/2 -translate-x-1/2 bg-primary text-primary-foreground px-4 py-2 rounded transition-all;
+    @apply focus:top-4 z-50;
+  }
+  
+  /* Enhanced button focus states */
+  button:focus-visible,
+  [role="button"]:focus-visible {
+    @apply ring-2 ring-offset-2 ring-primary;
+  }
+  
+  /* Improved form focus indicators */
+  input:focus-visible,
+  textarea:focus-visible,
+  select:focus-visible {
+    @apply ring-2 ring-offset-2 ring-primary border-primary;
+  }
+  
+  /* High contrast mode support */
+  @media (prefers-contrast: high) {
+    .text-muted-foreground {
+      @apply text-foreground;
+    }
+    
+    .border {
+      @apply border-2;
+    }
+  }
+  
+  /* Reduced motion support */
+  @media (prefers-reduced-motion: reduce) {
+    * {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
 /* TaskHuddle Design System - Modern Collaborative Platform
 All colors MUST be HSL for consistency.
 */
