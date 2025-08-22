@@ -373,3 +373,107 @@ for each row execute function touch_updated_at();
 
 **Impact**\
 - ✅ Accurate "recently updated" lists
+
+---
+
+## CRITICAL (HIGH PRIORITY)
+
+### 13) Task Access Broken
+**File**: `supabase/policies.sql`  
+**Severity**: Critical  
+**Status**: ❌ Identified  
+**Problem**  
+Project members cannot access tasks they're assigned to. Only project owners can view/manage tasks.  
+**Root Cause**  
+RLS policies are scoped only to `owner_id`, ignoring valid `project_members`.  
+**Fix Proposal**
+```sql
+create policy "Tasks: members can view assigned tasks"
+on public.tasks for select
+using (
+  public.is_member(project_id)
+  or assigned_to = auth.uid()
+);
+```
+**Impact**  
+- 🚫 Blocked core functionality for members  
+- ✅ Fix restores expected collaboration
+
+---
+
+### 14) Team Member Access Issue
+**File**: `supabase/policies.sql`  
+**Severity**: Critical  
+**Status**: ❌ Identified  
+**Problem**  
+Project members cannot view other team members in projects they belong to.  
+**Root Cause**  
+`project_members` table lacks a proper `select` policy for members.  
+**Fix Proposal**
+```sql
+create policy "Members: visible to other members"
+on public.project_members for select
+using ( public.is_member(project_id) );
+```
+**Impact**  
+- 🚫 Collaboration blocked  
+- ✅ Fix allows member lists to show correctly
+
+---
+
+### 15) Email Harvesting Vulnerability
+**File**: `supabase/policies.sql`  
+**Severity**: Critical  
+**Status**: ❌ Identified  
+**Problem**  
+Team invitations table exposes raw email addresses to any authenticated user.  
+**Root Cause**  
+No RLS or overly broad read permissions on invitations table.  
+**Fix Proposal**
+```sql
+alter table public.invitations enable row level security;
+
+create policy "Invitations visible only to project admins/owners"
+on public.invitations for select
+using (
+  exists (
+    select 1 from public.project_members
+    where project_id = invitations.project_id
+    and user_id = auth.uid()
+    and role = 'admin'
+  ) or exists (
+    select 1 from public.projects p
+    where p.id = invitations.project_id
+      and p.owner_id = auth.uid()
+  )
+);
+```
+**Impact**  
+- 🚫 Risk of email scraping and spam  
+- ✅ Fix ensures invitations visible only to trusted roles
+
+---
+
+## MEDIUM PRIORITY
+
+### 16) Password Security Weakness
+**File**: `supabase/auth/settings`  
+**Severity**: Medium  
+**Status**: ❌ Identified  
+**Problem**  
+Leaked password protection (HIBP integration) is disabled in Supabase auth settings.  
+**Fix Proposal**  
+Enable `HIBP` check in Supabase dashboard → Auth → Settings.
+
+---
+
+### 17) OTP Expiry Misconfiguration
+**File**: `supabase/auth/settings`  
+**Severity**: Medium  
+**Status**: ❌ Identified  
+**Problem**  
+OTP tokens have longer expiry (30m) than recommended 5–10m security threshold.  
+**Fix Proposal**  
+Set OTP token expiry = 10m in Supabase dashboard → Auth → Settings.
+
+---
