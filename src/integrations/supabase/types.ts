@@ -333,11 +333,13 @@ export type Database = {
         Returns: boolean
       }
       reorder_task: {
-        Args: {
-          p_new_status: string
-          p_target_index: number
-          p_task_id: string
-        }
+        Args:
+          | {
+              p_new_status: Database["public"]["Enums"]["task_status"]
+              p_target_index: number
+              p_task_id: string
+            }
+          | { p_new_status: string; p_target_index: number; p_task_id: string }
         Returns: undefined
       }
     }

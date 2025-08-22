@@ -54,10 +54,16 @@ export default function TaskBoard() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
-  const [newTask, setNewTask] = useState({
+  const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
+  const [newTask, setNewTask] = useState<{
+    title: string;
+    description: string;
+    priority: 'low' | 'medium' | 'high' | 'critical';
+  }>({
     title: '',
     description: '',
-    priority: 'medium' as const
+    priority: 'medium'
   });
 
   useEffect(() => {
@@ -252,15 +258,25 @@ export default function TaskBoard() {
     const { draggableId, destination, source } = result;
     const newStatus = destination.droppableId as Task['status'];
 
+    // Don't do anything if dropped in the same position
+    if (source.droppableId === destination.droppableId && source.index === destination.index) {
+      return;
+    }
+
     try {
-      // Bug #3: Use gap-based reordering function
+      console.log('Moving task:', { draggableId, newStatus, targetIndex: destination.index });
+      
+      // Bug #3: Use gap-based reordering function with proper type casting
       const { error } = await supabase.rpc('reorder_task', {
         p_task_id: draggableId,
         p_new_status: newStatus,
         p_target_index: destination.index
       });
 
-      if (error) throw error;
+      if (error) {
+        console.error('Error in reorder_task:', error);
+        throw error;
+      }
 
       // Optimistic update
       setTasks(prev => {
@@ -296,7 +312,78 @@ export default function TaskBoard() {
       .sort((a, b) => a.order_index - b.order_index);
   };
 
-  // Bug #7: Fix timezone handling for dates
+  // Handle task editing
+  const handleEditTask = (task: Task) => {
+    setEditingTask(task);
+    setNewTask({
+      title: task.title,
+      description: task.description || '',
+      priority: task.priority
+    });
+    setIsEditDialogOpen(true);
+  };
+
+  const handleUpdateTask = async () => {
+    if (!editingTask || !newTask.title.trim()) return;
+
+    try {
+      const { error } = await supabase
+        .from('tasks')
+        .update({
+          title: newTask.title,
+          description: newTask.description || null,
+          priority: newTask.priority
+        })
+        .eq('id', editingTask.id);
+
+      if (error) throw error;
+
+      toast({
+        title: "Task updated!",
+        description: "Task has been successfully updated.",
+      });
+
+      setNewTask({ title: '', description: '', priority: 'medium' });
+      setIsEditDialogOpen(false);
+      setEditingTask(null);
+      await fetchTasks();
+    } catch (error: any) {
+      console.error('Error updating task:', error);
+      toast({
+        title: "Error updating task",
+        description: "Please try again.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  // Handle task deletion
+  const handleDeleteTask = async (taskId: string) => {
+    if (!confirm('Are you sure you want to delete this task?')) return;
+
+    try {
+      const { error } = await supabase
+        .from('tasks')
+        .delete()
+        .eq('id', taskId);
+
+      if (error) throw error;
+
+      toast({
+        title: "Task deleted!",
+        description: "Task has been successfully deleted.",
+      });
+
+      await fetchTasks();
+    } catch (error: any) {
+      console.error('Error deleting task:', error);
+      toast({
+        title: "Error deleting task",
+        description: "Please try again.",
+        variant: "destructive",
+      });
+    }
+  };
   const formatDate = (dateString: string, timezone = 'UTC') => {
     try {
       return formatInTimeZone(new Date(dateString), timezone, 'MMM d');
@@ -385,6 +472,61 @@ export default function TaskBoard() {
             </div>
           </DialogContent>
         </Dialog>
+
+        {/* Edit Task Dialog */}
+        <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Edit Task</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="edit-task-title">Title *</Label>
+                <Input
+                  id="edit-task-title"
+                  placeholder="Enter task title"
+                  value={newTask.title}
+                  onChange={(e) => setNewTask(prev => ({ ...prev, title: e.target.value }))}
+                />
+              </div>
+              
+              <div className="space-y-2">
+                <Label htmlFor="edit-task-description">Description</Label>
+                <Textarea
+                  id="edit-task-description"
+                  placeholder="Enter task description (optional)"
+                  value={newTask.description}
+                  onChange={(e) => setNewTask(prev => ({ ...prev, description: e.target.value }))}
+                  rows={3}
+                />
+              </div>
+              
+              <div className="space-y-2">
+                <Label>Priority</Label>
+                <Select value={newTask.priority} onValueChange={(value: any) => setNewTask(prev => ({ ...prev, priority: value }))}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="low">Low</SelectItem>
+                    <SelectItem value="medium">Medium</SelectItem>
+                    <SelectItem value="high">High</SelectItem>
+                    <SelectItem value="critical">Critical</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              
+              <div className="flex gap-2 pt-4">
+                <Button onClick={handleUpdateTask} disabled={!newTask.title.trim()} className="flex-1">
+                  Update Task
+                </Button>
+                <Button variant="outline" onClick={() => setIsEditDialogOpen(false)}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
       </div>
 
       {/* Kanban Board */}
@@ -432,7 +574,35 @@ export default function TaskBoard() {
                                     <h4 className="font-medium text-foreground text-sm line-clamp-2">
                                       {task.title}
                                     </h4>
-                                    <div className={`w-2 h-2 rounded-full ${priorityColors[task.priority]} flex-shrink-0 mt-1`} />
+                                    <div className="flex items-center gap-1">
+                                      <div className={`w-2 h-2 rounded-full ${priorityColors[task.priority]} flex-shrink-0`} />
+                                      <div className="flex gap-1">
+                                        <button
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleEditTask(task);
+                                          }}
+                                          className="p-1 hover:bg-accent rounded text-muted-foreground hover:text-foreground"
+                                          title="Edit task"
+                                        >
+                                          <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                          </svg>
+                                        </button>
+                                        <button
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleDeleteTask(task.id);
+                                          }}
+                                          className="p-1 hover:bg-destructive/10 rounded text-muted-foreground hover:text-destructive"
+                                          title="Delete task"
+                                        >
+                                          <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                          </svg>
+                                        </button>
+                                      </div>
+                                    </div>
                                   </div>
                                   
                                   {task.description && (
