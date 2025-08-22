@@ -19,8 +19,8 @@ interface Task {
   id: string;
   title: string;
   description: string | null;
-  status: 'todo' | 'in_progress' | 'done';
-  priority: 'low' | 'medium' | 'high';
+  status: 'todo' | 'in_progress' | 'done' | 'cancelled';
+  priority: 'low' | 'medium' | 'high' | 'critical';
   created_at: string;
   due_date: string | null;
   assigned_to: string | null;
@@ -35,7 +35,8 @@ const columns = [
 const priorityColors = {
   low: 'bg-green-500',
   medium: 'bg-yellow-500',
-  high: 'bg-red-500'
+  high: 'bg-red-500',
+  critical: 'bg-red-700'
 };
 
 export default function TaskBoard() {
@@ -122,7 +123,6 @@ export default function TaskBoard() {
           description: newTask.description || null,
           priority: newTask.priority,
           project_id: projectId,
-          created_by: user.id,
           status: 'todo'
         }]);
 
@@ -285,6 +285,7 @@ export default function TaskBoard() {
                     <SelectItem value="low">Low</SelectItem>
                     <SelectItem value="medium">Medium</SelectItem>
                     <SelectItem value="high">High</SelectItem>
+                    <SelectItem value="critical">Critical</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

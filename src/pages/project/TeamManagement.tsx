@@ -2,9 +2,6 @@ import { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
-import { teamInvitationSchema, type TeamInvitationInput } from '@/lib/validation';
-import { useRateLimit } from '@/hooks/useRateLimit';
-import { useSecurityAudit } from '@/hooks/useSecurityAudit';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -28,7 +25,6 @@ import {
   DropdownMenuContent, 
   DropdownMenuItem, 
   DropdownMenuTrigger,
-  DropdownMenuSeparator
 } from '@/components/ui/dropdown-menu';
 import { 
   AlertDialog,
@@ -45,10 +41,8 @@ import {
   Users, 
   Plus, 
   Search, 
-  Filter, 
   MoreHorizontal, 
   Mail, 
-  UserCheck, 
   UserX, 
   Shield,
   Crown,
@@ -58,58 +52,43 @@ import {
 interface TeamMember {
   id: string;
   user_id: string;
-  role_id: string;
-  status: 'active' | 'inactive' | 'suspended';
-  joined_at: string;
-  last_active_at?: string;
+  role: 'admin' | 'moderator' | 'user';
+  created_at: string;
   profiles: {
     display_name: string;
     email: string;
     avatar_url?: string;
   };
-  roles: {
-    name: string;
-    description: string;
-    permissions: any;
-  };
 }
 
 interface Role {
-  id: string;
-  name: string;
+  value: 'admin' | 'moderator' | 'user';
+  label: string;
   description: string;
-  permissions: any;
-  is_system_role: boolean;
 }
 
 interface Invitation {
   id: string;
   email: string;
-  status: 'pending' | 'accepted' | 'expired' | 'revoked';
+  status: string;
   expires_at: string;
   created_at: string;
-  roles: {
-    name: string;
-  };
+  role_id: string;
 }
 
 export default function TeamManagement() {
   const { projectId } = useParams<{ projectId: string }>();
   const { user } = useAuth();
   
-  // Security hooks
-  const rateLimit = useRateLimit({
-    maxAttempts: 10,
-    windowMinutes: 60,
-    action: 'invitation'
-  });
-  const { logSecurityEvent } = useSecurityAudit();
   const [members, setMembers] = useState<TeamMember[]>([]);
-  const [roles, setRoles] = useState<Role[]>([]);
+  const [roles] = useState<Role[]>([
+    { value: 'user', label: 'User', description: 'Basic project member' },
+    { value: 'moderator', label: 'Moderator', description: 'Can manage tasks and members' },
+    { value: 'admin', label: 'Admin', description: 'Full project access' }
+  ]);
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState<string>('all');
   const [roleFilter, setRoleFilter] = useState<string>('all');
   
   // Modal states
@@ -119,19 +98,16 @@ export default function TeamManagement() {
   const [memberToRemove, setMemberToRemove] = useState<TeamMember | null>(null);
   
   // Form states
-  const [inviteForm, setInviteForm] = useState<TeamInvitationInput>({
+  const [inviteForm, setInviteForm] = useState({
     email: '',
-    roleId: '',
+    role: 'user' as 'admin' | 'moderator' | 'user',
     message: ''
   });
-  const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
   
   const [editForm, setEditForm] = useState<{
-    role_id: string;
-    status: 'active' | 'inactive' | 'suspended';
+    role: 'admin' | 'moderator' | 'user';
   }>({
-    role_id: '',
-    status: 'active'
+    role: 'user'
   });
 
   useEffect(() => {
@@ -144,46 +120,35 @@ export default function TeamManagement() {
     try {
       setLoading(true);
       
-      // Fetch team members with simplified query to avoid foreign key issues
+      // Fetch team members with profiles
       const { data: membersData, error: membersError } = await supabase
         .from('project_members')
         .select('*')
         .eq('project_id', projectId)
-        .order('joined_at', { ascending: false });
+        .order('created_at', { ascending: false });
 
       if (membersError) throw membersError;
 
-      // Fetch profiles and roles separately
+      // Fetch profiles separately
       const processedMembers = [];
       if (membersData) {
         for (const member of membersData) {
-          const [profileResult, roleResult] = await Promise.all([
-            supabase.from('profiles').select('display_name, email, avatar_url').eq('user_id', member.user_id).single(),
-            supabase.from('roles').select('name, description, permissions').eq('id', member.role_id).single()
-          ]);
+          const profileResult = await supabase
+            .from('profiles')
+            .select('display_name, email, avatar_url')
+            .eq('user_id', member.user_id)
+            .single();
 
-          if (profileResult.data && roleResult.data) {
+          if (profileResult.data) {
             processedMembers.push({
               ...member,
-              profiles: profileResult.data,
-              roles: roleResult.data
+              profiles: profileResult.data
             });
           }
         }
       }
 
-      if (membersError) throw membersError;
-
-      // Fetch available roles
-      const { data: rolesData, error: rolesError } = await supabase
-        .from('roles')
-        .select('*')
-        .eq('is_system_role', true)
-        .order('name');
-
-      if (rolesError) throw rolesError;
-
-      // Fetch pending invitations (simplified query)
+      // Fetch pending invitations
       const { data: invitationsData, error: invitationsError } = await supabase
         .from('team_invitations')
         .select('*')
@@ -193,28 +158,8 @@ export default function TeamManagement() {
 
       if (invitationsError) throw invitationsError;
 
-      // Process invitations with role names
-      const processedInvitations = [];
-      if (invitationsData) {
-        for (const invitation of invitationsData) {
-          const roleResult = await supabase
-            .from('roles')
-            .select('name')
-            .eq('id', invitation.role_id)
-            .single();
-
-          if (roleResult.data) {
-            processedInvitations.push({
-              ...invitation,
-              roles: roleResult.data
-            });
-          }
-        }
-      }
-
       setMembers(processedMembers as TeamMember[]);
-      setRoles(rolesData || []);
-      setInvitations(processedInvitations as Invitation[]);
+      setInvitations(invitationsData || []);
     } catch (error: any) {
       console.error('Error fetching team data:', error);
       toast({
@@ -228,117 +173,30 @@ export default function TeamManagement() {
   };
 
   const handleInviteMember = async () => {
-    if (!projectId || !user) return;
-
-    // Reset validation errors
-    setValidationErrors({});
-
-    // Validate input
-    const validation = teamInvitationSchema.safeParse(inviteForm);
-    if (!validation.success) {
-      const errors: Record<string, string> = {};
-      validation.error.issues.forEach((err) => {
-        if (err.path[0]) {
-          errors[err.path[0] as string] = err.message;
-        }
-      });
-      setValidationErrors(errors);
-      return;
-    }
-
-    // Check rate limit
-    const canProceed = await rateLimit.checkRateLimit(projectId);
-    if (!canProceed) return;
+    if (!projectId || !user || !inviteForm.email.trim()) return;
 
     try {
-      // Log security event
-      await logSecurityEvent({
-        action: 'team_invitation_attempt',
-        resource_type: 'project',
-        resource_id: projectId,
-        details: { 
-          invited_email: validation.data.email,
-          role_id: validation.data.roleId 
-        }
-      });
-
       const { error } = await supabase
         .from('team_invitations')
         .insert([{
           project_id: projectId,
-          email: validation.data.email,
-          role_id: validation.data.roleId,
+          email: inviteForm.email,
+          role_id: inviteForm.role,
           invited_by: user.id
         }]);
 
       if (error) throw error;
 
-      // Record successful attempt for rate limiting
-      await rateLimit.recordAttempt(projectId);
-
-      // Get project details and role info for email
-      const [{ data: projectData }, { data: roleData }, { data: inviterProfile }] = await Promise.all([
-        supabase.from('projects').select('name').eq('id', projectId).single(),
-        supabase.from('roles').select('name').eq('id', validation.data.roleId).single(),
-        supabase.from('profiles').select('display_name').eq('user_id', user.id).single()
-      ]);
-
-      // Call edge function to send email
-      const { error: emailError } = await supabase.functions.invoke('send-team-invitation', {
-        body: {
-          email: validation.data.email,
-          projectId: projectId,
-          projectName: projectData?.name || 'Unknown Project',
-          inviterName: inviterProfile?.display_name || user.email || 'Team Admin',
-          roleName: roleData?.name || 'Member',
-          invitationToken: '', // Will be set by the edge function
-          message: validation.data.message || '',
-        }
+      toast({
+        title: "Invitation sent!",
+        description: `An invitation has been sent to ${inviteForm.email}.`,
       });
 
-      if (emailError) {
-        console.error('Email sending failed:', emailError);
-        toast({
-          title: "Invitation created but email failed",
-          description: "The invitation was created but email could not be sent. Please contact the user directly.",
-          variant: "destructive",
-        });
-      } else {
-        toast({
-          title: "Invitation sent!",
-          description: `An invitation has been sent to ${validation.data.email}.`,
-        });
-      }
-
-      // Log successful invitation
-      await logSecurityEvent({
-        action: 'team_invitation_sent',
-        resource_type: 'project',
-        resource_id: projectId,
-        details: { 
-          invited_email: validation.data.email,
-          email_sent: !emailError 
-        }
-      });
-
-      setInviteForm({ email: '', roleId: '', message: '' });
+      setInviteForm({ email: '', role: 'user', message: '' });
       setIsInviteModalOpen(false);
       fetchTeamData();
     } catch (error: any) {
       console.error('Error inviting member:', error);
-      
-      // Log failed invitation
-      await logSecurityEvent({
-        action: 'team_invitation_failed',
-        resource_type: 'project',
-        resource_id: projectId,
-        success: false,
-        details: { 
-          invited_email: validation.data.email,
-          error: error.message 
-        }
-      });
-
       toast({
         title: "Error sending invitation",
         description: error.message || "Please try again.",
@@ -348,14 +206,13 @@ export default function TeamManagement() {
   };
 
   const handleUpdateMember = async () => {
-    if (!selectedMember || !editForm.role_id) return;
+    if (!selectedMember) return;
 
     try {
       const { error } = await supabase
         .from('project_members')
         .update({
-          role_id: editForm.role_id,
-          status: editForm.status
+          role: editForm.role
         })
         .eq('id', selectedMember.id);
 
@@ -410,36 +267,29 @@ export default function TeamManagement() {
   const openEditModal = (member: TeamMember) => {
     setSelectedMember(member);
     setEditForm({
-      role_id: member.role_id,
-      status: member.status
+      role: member.role
     });
     setIsEditMemberModalOpen(true);
   };
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'active': return 'bg-green-100 text-green-800';
-      case 'inactive': return 'bg-gray-100 text-gray-800';
-      case 'suspended': return 'bg-red-100 text-red-800';
-      default: return 'bg-gray-100 text-gray-800';
-    }
-  };
-
   const getRoleIcon = (roleName: string) => {
     switch (roleName) {
-      case 'Owner': return <Crown className="h-4 w-4 text-yellow-600" />;
-      case 'Admin': return <Shield className="h-4 w-4 text-blue-600" />;
+      case 'admin': return <Shield className="h-4 w-4 text-blue-600" />;
+      case 'moderator': return <Crown className="h-4 w-4 text-yellow-600" />;
       default: return <Users className="h-4 w-4 text-gray-600" />;
     }
   };
 
+  const getRoleLabel = (role: string) => {
+    return roles.find(r => r.value === role)?.label || role;
+  };
+
   const filteredMembers = members.filter(member => {
-    const matchesSearch = member.profiles.display_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    const matchesSearch = member.profiles.display_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          member.profiles.email.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesStatus = statusFilter === 'all' || member.status === statusFilter;
-    const matchesRole = roleFilter === 'all' || member.role_id === roleFilter;
+    const matchesRole = roleFilter === 'all' || member.role === roleFilter;
     
-    return matchesSearch && matchesStatus && matchesRole;
+    return matchesSearch && matchesRole;
   });
 
   if (loading) {
@@ -490,31 +340,25 @@ export default function TeamManagement() {
                   value={inviteForm.email}
                   onChange={(e) => setInviteForm(prev => ({ ...prev, email: e.target.value }))}
                 />
-                {validationErrors.email && (
-                  <p className="text-sm text-destructive">{validationErrors.email}</p>
-                )}
               </div>
               
               <div className="space-y-2">
                 <Label>Role</Label>
-                <Select value={inviteForm.roleId} onValueChange={(value) => setInviteForm(prev => ({ ...prev, roleId: value }))}>
+                <Select value={inviteForm.role} onValueChange={(value: any) => setInviteForm(prev => ({ ...prev, role: value }))}>
                   <SelectTrigger>
                     <SelectValue placeholder="Select a role" />
                   </SelectTrigger>
                   <SelectContent>
                     {roles.map((role) => (
-                      <SelectItem key={role.id} value={role.id}>
+                      <SelectItem key={role.value} value={role.value}>
                         <div className="flex items-center gap-2">
-                          {getRoleIcon(role.name)}
-                          {role.name}
+                          {getRoleIcon(role.value)}
+                          {role.label}
                         </div>
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
-                {validationErrors.roleId && (
-                  <p className="text-sm text-destructive">{validationErrors.roleId}</p>
-                )}
               </div>
               
               <div className="space-y-2">
@@ -526,9 +370,6 @@ export default function TeamManagement() {
                   onChange={(e) => setInviteForm(prev => ({ ...prev, message: e.target.value }))}
                   rows={3}
                 />
-                {validationErrors.message && (
-                  <p className="text-sm text-destructive">{validationErrors.message}</p>
-                )}
               </div>
             </div>
             <DialogFooter>
@@ -537,7 +378,7 @@ export default function TeamManagement() {
               </Button>
               <Button 
                 onClick={handleInviteMember}
-                disabled={!inviteForm.email || !inviteForm.roleId}
+                disabled={!inviteForm.email}
               >
                 <Mail className="h-4 w-4 mr-2" />
                 Send Invitation
@@ -548,24 +389,13 @@ export default function TeamManagement() {
       </div>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card className="bg-gradient-card shadow-card border-0">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">Total Members</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-foreground">{members.length}</div>
-          </CardContent>
-        </Card>
-        
-        <Card className="bg-gradient-card shadow-card border-0">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Active</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-green-600">
-              {members.filter(m => m.status === 'active').length}
-            </div>
           </CardContent>
         </Card>
         
@@ -584,7 +414,7 @@ export default function TeamManagement() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-blue-600">
-              {members.filter(m => m.roles.name === 'Admin' || m.roles.name === 'Owner').length}
+              {members.filter(m => m.role === 'admin').length}
             </div>
           </CardContent>
         </Card>
@@ -610,18 +440,6 @@ export default function TeamManagement() {
               </div>
             </div>
             
-            <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger className="w-[140px]">
-                <SelectValue placeholder="Status" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Status</SelectItem>
-                <SelectItem value="active">Active</SelectItem>
-                <SelectItem value="inactive">Inactive</SelectItem>
-                <SelectItem value="suspended">Suspended</SelectItem>
-              </SelectContent>
-            </Select>
-            
             <Select value={roleFilter} onValueChange={setRoleFilter}>
               <SelectTrigger className="w-[140px]">
                 <SelectValue placeholder="Role" />
@@ -629,7 +447,7 @@ export default function TeamManagement() {
               <SelectContent>
                 <SelectItem value="all">All Roles</SelectItem>
                 {roles.map((role) => (
-                  <SelectItem key={role.id} value={role.id}>{role.name}</SelectItem>
+                  <SelectItem key={role.value} value={role.value}>{role.label}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -642,9 +460,7 @@ export default function TeamManagement() {
                 <TableRow>
                   <TableHead>Member</TableHead>
                   <TableHead>Role</TableHead>
-                  <TableHead>Status</TableHead>
                   <TableHead>Joined</TableHead>
-                  <TableHead>Last Active</TableHead>
                   <TableHead className="w-[70px]">Actions</TableHead>
                 </TableRow>
               </TableHeader>
@@ -667,23 +483,12 @@ export default function TeamManagement() {
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-2">
-                        {getRoleIcon(member.roles.name)}
-                        {member.roles.name}
+                        {getRoleIcon(member.role)}
+                        {getRoleLabel(member.role)}
                       </div>
                     </TableCell>
                     <TableCell>
-                      <Badge className={getStatusColor(member.status)}>
-                        {member.status}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      {new Date(member.joined_at).toLocaleDateString()}
-                    </TableCell>
-                    <TableCell>
-                      {member.last_active_at 
-                        ? new Date(member.last_active_at).toLocaleDateString()
-                        : 'Never'
-                      }
+                      {new Date(member.created_at).toLocaleDateString()}
                     </TableCell>
                     <TableCell>
                       <DropdownMenu>
@@ -728,20 +533,12 @@ export default function TeamManagement() {
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-2">
-                        {getRoleIcon(invitation.roles.name)}
-                        {invitation.roles.name}
+                        {getRoleIcon(invitation.role_id)}
+                        {getRoleLabel(invitation.role_id)}
                       </div>
                     </TableCell>
                     <TableCell>
-                      <Badge className="bg-yellow-100 text-yellow-800">
-                        {invitation.status}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
                       {new Date(invitation.created_at).toLocaleDateString()}
-                    </TableCell>
-                    <TableCell>
-                      Expires {new Date(invitation.expires_at).toLocaleDateString()}
                     </TableCell>
                     <TableCell>
                       <Button variant="ghost" size="sm" className="text-muted-foreground">
@@ -762,39 +559,25 @@ export default function TeamManagement() {
           <DialogHeader>
             <DialogTitle>Edit Team Member</DialogTitle>
             <DialogDescription>
-              Update the role and status for {selectedMember?.profiles.display_name || selectedMember?.profiles.email}
+              Update the role for {selectedMember?.profiles.display_name || selectedMember?.profiles.email}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
               <Label>Role</Label>
-              <Select value={editForm.role_id} onValueChange={(value) => setEditForm(prev => ({ ...prev, role_id: value }))}>
+              <Select value={editForm.role} onValueChange={(value: any) => setEditForm(prev => ({ ...prev, role: value }))}>
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   {roles.map((role) => (
-                    <SelectItem key={role.id} value={role.id}>
+                    <SelectItem key={role.value} value={role.value}>
                       <div className="flex items-center gap-2">
-                        {getRoleIcon(role.name)}
-                        {role.name}
+                        {getRoleIcon(role.value)}
+                        {role.label}
                       </div>
                     </SelectItem>
                   ))}
-                </SelectContent>
-              </Select>
-            </div>
-            
-            <div className="space-y-2">
-              <Label>Status</Label>
-              <Select value={editForm.status} onValueChange={(value: any) => setEditForm(prev => ({ ...prev, status: value }))}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="active">Active</SelectItem>
-                  <SelectItem value="inactive">Inactive</SelectItem>
-                  <SelectItem value="suspended">Suspended</SelectItem>
                 </SelectContent>
               </Select>
             </div>
