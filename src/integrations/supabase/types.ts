@@ -49,6 +49,63 @@ export type Database = {
           },
         ]
       }
+      otp_codes: {
+        Row: {
+          code_hash: string
+          created_at: string | null
+          email: string
+          expires_at: string
+          id: string
+          purpose: string
+          used_at: string | null
+          user_id: string | null
+        }
+        Insert: {
+          code_hash: string
+          created_at?: string | null
+          email: string
+          expires_at: string
+          id?: string
+          purpose: string
+          used_at?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          code_hash?: string
+          created_at?: string | null
+          email?: string
+          expires_at?: string
+          id?: string
+          purpose?: string
+          used_at?: string | null
+          user_id?: string | null
+        }
+        Relationships: []
+      }
+      otp_rate_limits: {
+        Row: {
+          attempts: number | null
+          created_at: string | null
+          email: string
+          id: string
+          window_start: string | null
+        }
+        Insert: {
+          attempts?: number | null
+          created_at?: string | null
+          email: string
+          id?: string
+          window_start?: string | null
+        }
+        Update: {
+          attempts?: number | null
+          created_at?: string | null
+          email?: string
+          id?: string
+          window_start?: string | null
+        }
+        Relationships: []
+      }
       profiles: {
         Row: {
           avatar_url: string | null
@@ -321,6 +378,14 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      cleanup_expired_otps: {
+        Args: Record<PropertyKey, never>
+        Returns: undefined
+      }
+      generate_otp: {
+        Args: { p_email: string; p_purpose?: string; p_user_id?: string }
+        Returns: string
+      }
       has_role: {
         Args: {
           _role: Database["public"]["Enums"]["app_role"]
@@ -339,6 +404,10 @@ export type Database = {
           p_task_id: string
         }
         Returns: undefined
+      }
+      verify_otp: {
+        Args: { p_code: string; p_email: string; p_purpose?: string }
+        Returns: boolean
       }
     }
     Enums: {
