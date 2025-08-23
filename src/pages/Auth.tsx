@@ -8,19 +8,20 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { toast } from '@/hooks/use-toast';
 import { Eye, EyeOff, Users, Zap, Target } from 'lucide-react';
-import EmailVerification from '@/components/auth/EmailVerification';
+import OTPInput from '@/components/auth/OTPInput';
 
 export default function Auth() {
   const [isLoading, setIsLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
-  const [showEmailVerification, setShowEmailVerification] = useState(false);
+  const [showOTPInput, setShowOTPInput] = useState(false);
+  const [otpPurpose, setOtpPurpose] = useState<'signup' | 'login'>('signup');
   const [formData, setFormData] = useState({
     email: '',
     password: '',
     displayName: ''
   });
   
-  const { signIn, signUp } = useAuth();
+  const { signIn, signUp, completeSignup, completeLogin } = useAuth();
   const navigate = useNavigate();
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -38,11 +39,10 @@ export default function Auth() {
       const { error } = await signIn(formData.email, formData.password);
       
       if (error) {
-        // Check if it's an email verification error
-        if (error.message.toLowerCase().includes('email not confirmed') || 
-            error.message.toLowerCase().includes('verify') ||
-            error.message.toLowerCase().includes('confirmation')) {
-          setShowEmailVerification(true);
+        // Check if OTP is required
+        if (error.needsOTP) {
+          setOtpPurpose('login');
+          setShowOTPInput(true);
         } else {
           toast({
             title: "Sign in failed",
@@ -82,8 +82,9 @@ export default function Auth() {
           variant: "destructive",
         });
       } else {
-        // Show email verification screen instead of navigating
-        setShowEmailVerification(true);
+        // Show OTP input screen for signup verification
+        setOtpPurpose('signup');
+        setShowOTPInput(true);
       }
     } catch (error) {
       toast({
@@ -96,30 +97,58 @@ export default function Auth() {
     }
   };
 
-  const handleEmailChange = (newEmail: string) => {
-    setFormData(prev => ({ ...prev, email: newEmail }));
-  };
+  const handleVerificationComplete = async () => {
+    try {
+      if (otpPurpose === 'signup') {
+        const { error } = await completeSignup();
+        if (error) {
+          toast({
+            title: "Signup failed",
+            description: error.message,
+            variant: "destructive",
+          });
+          return;
+        }
+      } else {
+        const { error } = await completeLogin();
+        if (error) {
+          toast({
+            title: "Login failed",
+            description: error.message,
+            variant: "destructive",
+          });
+          return;
+        }
+      }
 
-  const handleVerificationComplete = () => {
-    toast({
-      title: "Welcome to TaskHuddle!",
-      description: "Your email has been verified successfully.",
-    });
-    navigate('/dashboard');
+      toast({
+        title: "Welcome to TaskHuddle!",
+        description: "Your account has been verified successfully.",
+      });
+      navigate('/dashboard');
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to complete verification. Please try again.",
+        variant: "destructive",
+      });
+    }
   };
 
   const handleBackToAuth = () => {
-    setShowEmailVerification(false);
+    setShowOTPInput(false);
+    sessionStorage.removeItem('pendingSignup');
+    sessionStorage.removeItem('pendingLogin');
   };
 
-  // Show email verification screen if needed
-  if (showEmailVerification) {
+  // Show OTP input screen if needed
+  if (showOTPInput) {
     return (
       <div className="min-h-screen bg-gradient-subtle flex items-center justify-center">
-        <EmailVerification
+        <OTPInput
           email={formData.email}
+          purpose={otpPurpose}
           onBack={handleBackToAuth}
-          onEmailChange={handleEmailChange}
           onVerificationComplete={handleVerificationComplete}
         />
       </div>
