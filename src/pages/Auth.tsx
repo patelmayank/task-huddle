@@ -8,10 +8,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { toast } from '@/hooks/use-toast';
 import { Eye, EyeOff, Users, Zap, Target } from 'lucide-react';
+import EmailVerification from '@/components/auth/EmailVerification';
 
 export default function Auth() {
   const [isLoading, setIsLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [showEmailVerification, setShowEmailVerification] = useState(false);
   const [formData, setFormData] = useState({
     email: '',
     password: '',
@@ -36,11 +38,18 @@ export default function Auth() {
       const { error } = await signIn(formData.email, formData.password);
       
       if (error) {
-        toast({
-          title: "Sign in failed",
-          description: error.message,
-          variant: "destructive",
-        });
+        // Check if it's an email verification error
+        if (error.message.toLowerCase().includes('email not confirmed') || 
+            error.message.toLowerCase().includes('verify') ||
+            error.message.toLowerCase().includes('confirmation')) {
+          setShowEmailVerification(true);
+        } else {
+          toast({
+            title: "Sign in failed",
+            description: error.message,
+            variant: "destructive",
+          });
+        }
       } else {
         toast({
           title: "Welcome back!",
@@ -73,11 +82,8 @@ export default function Auth() {
           variant: "destructive",
         });
       } else {
-        toast({
-          title: "Account created!",
-          description: "Please check your email to verify your account.",
-        });
-        navigate('/dashboard');
+        // Show email verification screen instead of navigating
+        setShowEmailVerification(true);
       }
     } catch (error) {
       toast({
@@ -89,6 +95,36 @@ export default function Auth() {
       setIsLoading(false);
     }
   };
+
+  const handleEmailChange = (newEmail: string) => {
+    setFormData(prev => ({ ...prev, email: newEmail }));
+  };
+
+  const handleVerificationComplete = () => {
+    toast({
+      title: "Welcome to TaskHuddle!",
+      description: "Your email has been verified successfully.",
+    });
+    navigate('/dashboard');
+  };
+
+  const handleBackToAuth = () => {
+    setShowEmailVerification(false);
+  };
+
+  // Show email verification screen if needed
+  if (showEmailVerification) {
+    return (
+      <div className="min-h-screen bg-gradient-subtle flex items-center justify-center">
+        <EmailVerification
+          email={formData.email}
+          onBack={handleBackToAuth}
+          onEmailChange={handleEmailChange}
+          onVerificationComplete={handleVerificationComplete}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-subtle flex">
